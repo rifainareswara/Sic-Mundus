@@ -1,0 +1,31 @@
+# Build stage
+FROM alpine:3.19 AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache curl build-base musl-dev sqlite-dev
+
+# Install Rust nightly
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Copy manifests
+COPY Cargo.toml ./
+COPY src ./src
+
+# Build
+RUN cargo build --release
+
+# Final stage
+FROM alpine:3.19
+
+WORKDIR /app
+RUN apk add --no-cache sqlite-libs ca-certificates
+
+COPY --from=builder /app/target/release/sic_mundus_backend /app/sic-mundus-backend
+
+# Expose port 8006
+EXPOSE 8006
+
+CMD ["/app/sic-mundus-backend"]
