@@ -99,20 +99,17 @@
               </td>
               <td class="px-5 py-2.5 text-right text-slate-400">{{ formatHours(row.minutes_all_time) }}</td>
             </tr>
-            <!-- User subtotal -->
-            <tr class="border-t border-slate-700 bg-slate-800/20">
-              <td class="px-5 py-2.5 pl-14 text-slate-500 text-xs font-semibold uppercase tracking-wide">Subtotal</td>
-              <td class="px-5 py-2.5 text-right font-bold text-emerald-400">{{ formatHours(user.totalPeriod) }}</td>
-              <td class="px-5 py-2.5 text-right font-bold text-blue-400">{{ formatHours(user.totalAllTime) }}</td>
+            <!-- User total row -->
+            <tr class="border-t-2 border-slate-600 bg-slate-800/50">
+              <td class="px-5 py-3 pl-5">
+                <span class="text-white font-black text-xs uppercase tracking-wide">
+                  Total {{ user.full_name || user.username }}
+                </span>
+              </td>
+              <td class="px-5 py-3 text-right font-black text-emerald-400 text-base">{{ formatHours(user.totalPeriod) }}</td>
+              <td class="px-5 py-3 text-right font-black text-blue-400 text-base">{{ formatHours(user.totalAllTime) }}</td>
             </tr>
           </template>
-
-          <!-- Grand Total -->
-          <tr v-if="filteredUsers.length > 0" class="border-t-2 border-slate-600 bg-slate-800/60">
-            <td class="px-5 py-3 font-black text-white uppercase tracking-wide text-xs">Grand Total</td>
-            <td class="px-5 py-3 text-right font-black text-emerald-400 text-base">{{ formatHours(grandTotalPeriod) }}</td>
-            <td class="px-5 py-3 text-right font-black text-blue-400 text-base">{{ formatHours(grandTotalAllTime) }}</td>
-          </tr>
 
           <!-- Empty -->
           <tr v-if="filteredUsers.length === 0 && !loading">
