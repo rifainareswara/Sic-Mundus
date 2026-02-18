@@ -10,11 +10,32 @@ use crate::{
 use actix_web::{web, HttpMessage, HttpRequest, HttpResponse, Responder};
 use sqlx::query_as;
 
-// Admin only: Get all users
-pub async fn get_users(pool: web::Data<DbPool>) -> impl Responder {
-    let users = query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
-        .fetch_all(pool.get_ref())
-        .await;
+// Helper: extract role from request
+fn caller_role(req: &HttpRequest) -> Option<String> {
+    req.extensions().get::<AuthClaims>().map(|c| c.role.clone())
+}
+fn caller_id(req: &HttpRequest) -> Option<String> {
+    req.extensions().get::<AuthClaims>().map(|c| c.sub.clone())
+}
+
+// Admin/Superadmin: Get users (superadmin sees all, admin sees only users)
+pub async fn get_users(pool: web::Data<DbPool>, req: HttpRequest) -> impl Responder {
+    let role = match caller_role(&req) {
+        Some(r) => r,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    let users = if role == "superadmin" {
+        query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
+            .fetch_all(pool.get_ref())
+            .await
+    } else if role == "admin" {
+        query_as::<_, User>("SELECT * FROM users WHERE role = 'user' ORDER BY created_at DESC")
+            .fetch_all(pool.get_ref())
+            .await
+    } else {
+        return HttpResponse::Forbidden().finish();
+    };
 
     match users {
         Ok(users) => HttpResponse::Ok().json(users),
@@ -22,9 +43,30 @@ pub async fn get_users(pool: web::Data<DbPool>) -> impl Responder {
     }
 }
 
-// Admin only: Delete user
-pub async fn delete_user(pool: web::Data<DbPool>, path: web::Path<String>) -> impl Responder {
+// Admin/Superadmin: Delete user (admin can only delete 'user' role)
+pub async fn delete_user(pool: web::Data<DbPool>, req: HttpRequest, path: web::Path<String>) -> impl Responder {
+    let caller_role = match caller_role(&req) {
+        Some(r) => r,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
     let user_id = path.into_inner();
+
+    // Fetch target user's role
+    let target_role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .unwrap_or(None);
+
+    match target_role.as_deref() {
+        None => return HttpResponse::NotFound().finish(),
+        Some("superadmin") => return HttpResponse::Forbidden().body("Cannot delete superadmin"),
+        Some("admin") if caller_role != "superadmin" => {
+            return HttpResponse::Forbidden().body("Only superadmin can delete admin")
+        }
+        _ => {}
+    }
+
     let result = sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user_id)
         .execute(pool.get_ref())
@@ -36,17 +78,51 @@ pub async fn delete_user(pool: web::Data<DbPool>, path: web::Path<String>) -> im
     }
 }
 
-// Admin only: Update user role
+// Admin/Superadmin: Update user role
 pub async fn update_role(
     pool: web::Data<DbPool>,
+    req: HttpRequest,
     path: web::Path<String>,
     body: web::Json<UpdateRoleRequest>,
 ) -> impl Responder {
+    let caller_role = match caller_role(&req) {
+        Some(r) => r,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+    let caller_id = caller_id(&req).unwrap_or_default();
     let user_id = path.into_inner();
-    
-    // Validate role
-    if body.role != "admin" && body.role != "user" {
-        return HttpResponse::BadRequest().body("Invalid role");
+
+    if user_id == caller_id {
+        return HttpResponse::BadRequest().body("Cannot change your own role");
+    }
+
+    // Validate allowed roles
+    let allowed_roles = if caller_role == "superadmin" {
+        vec!["superadmin", "admin", "user"]
+    } else if caller_role == "admin" {
+        vec!["user"] // admin can only toggle between user roles
+    } else {
+        return HttpResponse::Forbidden().finish();
+    };
+
+    if !allowed_roles.contains(&body.role.as_str()) {
+        return HttpResponse::BadRequest().body("Invalid role or insufficient permissions");
+    }
+
+    // Fetch target user's current role
+    let target_role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(pool.get_ref())
+        .await
+        .unwrap_or(None);
+
+    match target_role.as_deref() {
+        None => return HttpResponse::NotFound().finish(),
+        Some("superadmin") => return HttpResponse::Forbidden().body("Cannot change superadmin role"),
+        Some("admin") if caller_role != "superadmin" => {
+            return HttpResponse::Forbidden().body("Only superadmin can change admin role")
+        }
+        _ => {}
     }
 
     let result = sqlx::query("UPDATE users SET role = $1 WHERE id = $2")
@@ -134,20 +210,33 @@ pub async fn get_time_report_admin(pool: web::Data<DbPool>, req: HttpRequest) ->
             None => return HttpResponse::Unauthorized().finish(),
         }
     };
-    if role != "admin" {
+    if role != "admin" && role != "superadmin" {
         return HttpResponse::Forbidden().body("Admin only");
     }
 
-    let sql = "SELECT u.id AS user_id, u.username, u.full_name,
-                      p.id AS project_id, p.name AS project_name, p.color AS project_color,
-                      COALESCE(SUM(e.duration_minutes), 0)::BIGINT AS total_minutes
-               FROM users u
-               LEFT JOIN time_entries e ON e.user_id = u.id
-               LEFT JOIN tasks t ON t.id = e.task_id
-               LEFT JOIN projects p ON p.id = t.project_id
-               WHERE u.role != 'admin'
-               GROUP BY u.id, u.username, u.full_name, p.id, p.name, p.color
-               ORDER BY u.username, total_minutes DESC";
+    // superadmin sees everyone; admin sees only 'user' role
+    let sql = if role == "superadmin" {
+        "SELECT u.id AS user_id, u.username, u.full_name,
+                p.id AS project_id, p.name AS project_name, p.color AS project_color,
+                COALESCE(SUM(e.duration_minutes), 0)::BIGINT AS total_minutes
+         FROM users u
+         LEFT JOIN time_entries e ON e.user_id = u.id
+         LEFT JOIN tasks t ON t.id = e.task_id
+         LEFT JOIN projects p ON p.id = t.project_id
+         GROUP BY u.id, u.username, u.full_name, p.id, p.name, p.color
+         ORDER BY u.username, total_minutes DESC"
+    } else {
+        "SELECT u.id AS user_id, u.username, u.full_name,
+                p.id AS project_id, p.name AS project_name, p.color AS project_color,
+                COALESCE(SUM(e.duration_minutes), 0)::BIGINT AS total_minutes
+         FROM users u
+         LEFT JOIN time_entries e ON e.user_id = u.id
+         LEFT JOIN tasks t ON t.id = e.task_id
+         LEFT JOIN projects p ON p.id = t.project_id
+         WHERE u.role = 'user'
+         GROUP BY u.id, u.username, u.full_name, p.id, p.name, p.color
+         ORDER BY u.username, total_minutes DESC"
+    };
 
     let result = query_as::<_, TimeReportRow>(sql)
         .fetch_all(pool.get_ref())

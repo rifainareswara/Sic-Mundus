@@ -269,11 +269,13 @@ pub async fn get_all_tasks_admin(pool: web::Data<DbPool>, req: HttpRequest) -> i
             None => return HttpResponse::Unauthorized().finish(),
         }
     };
-    if role != "admin" {
+    if role != "admin" && role != "superadmin" {
         return HttpResponse::Forbidden().body("Admin only");
     }
 
-    let sql = "SELECT t.id, t.title, t.description, t.category, t.status, t.priority,
+    let sql = if role == "superadmin" {
+        // superadmin sees all tasks from all users
+        "SELECT t.id, t.title, t.description, t.category, t.status, t.priority,
                       t.start_date, t.due_date, t.created_at, t.updated_at,
                       t.project_id,
                       p.name AS project_name,
@@ -289,7 +291,28 @@ pub async fn get_all_tasks_admin(pool: web::Data<DbPool>, req: HttpRequest) -> i
                LEFT JOIN projects p ON p.id = t.project_id
                JOIN users u ON u.id = t.user_id
                GROUP BY t.id, p.name, p.color, u.username, u.full_name
-               ORDER BY t.updated_at DESC";
+               ORDER BY t.updated_at DESC"
+    } else {
+        // admin sees only tasks from 'user' role
+        "SELECT t.id, t.title, t.description, t.category, t.status, t.priority,
+                      t.start_date, t.due_date, t.created_at, t.updated_at,
+                      t.project_id,
+                      p.name AS project_name,
+                      p.color AS project_color,
+                      t.user_id,
+                      u.username,
+                      u.full_name,
+                      COALESCE(SUM(e.duration_minutes), 0)::BIGINT AS total_minutes,
+                      COALESCE((SELECT COUNT(*) FROM subtasks WHERE task_id = t.id), 0)::BIGINT AS subtask_count,
+                      COALESCE((SELECT COUNT(*) FROM subtasks WHERE task_id = t.id AND completed = TRUE), 0)::BIGINT AS subtask_done
+               FROM tasks t
+               LEFT JOIN time_entries e ON e.task_id = t.id
+               LEFT JOIN projects p ON p.id = t.project_id
+               JOIN users u ON u.id = t.user_id
+               WHERE u.role = 'user'
+               GROUP BY t.id, p.name, p.color, u.username, u.full_name
+               ORDER BY t.updated_at DESC"
+    };
 
     let result = query_as::<_, crate::models::task::AdminTask>(sql)
         .fetch_all(pool.get_ref())

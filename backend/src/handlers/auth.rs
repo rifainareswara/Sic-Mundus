@@ -41,7 +41,7 @@ pub async fn register(
         .map(|r| r.0)
         .unwrap_or(0);
 
-    let role = if user_count == 0 { "admin" } else { "user" };
+    let role = if user_count == 0 { "superadmin" } else { "user" };
     let full_name = body.full_name.trim().to_string();
     if full_name.is_empty() {
         return HttpResponse::BadRequest().body("Full name is required");

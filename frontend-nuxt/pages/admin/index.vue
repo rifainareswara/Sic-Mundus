@@ -24,9 +24,9 @@
               <button 
                 @click="openRoleModal(user)"
                 class="px-2 py-0.5 rounded text-xs font-bold uppercase transition-colors cursor-pointer"
-                :class="user.role === 'admin' ? 'bg-purple-900/30 text-purple-400 hover:bg-purple-900/50' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-                :disabled="user.id === auth.user?.id"
-                title="Click to toggle role"
+                :class="roleBadgeClass(user.role)"
+                :disabled="user.id === auth.user?.id || user.role === 'superadmin' && !auth.isSuperAdmin"
+                title="Click to change role"
               >
                 {{ user.role }}
               </button>
@@ -40,13 +40,14 @@
                 Reset Password
               </button>
               <button 
-                v-if="user.id !== auth.user?.id"
+                v-if="user.id !== auth.user?.id && canDelete(user)"
                 @click="openDeleteModal(user)"
                 class="text-red-400 hover:text-red-300 font-bold hover:underline"
               >
                 Delete
               </button>
-              <span v-else class="text-slate-600 italic">Current User</span>
+              <span v-else-if="user.id === auth.user?.id" class="text-slate-600 italic">Current User</span>
+              <span v-else class="text-slate-600 italic">Protected</span>
             </td>
           </tr>
         </tbody>
@@ -84,11 +85,19 @@
       <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
         <h2 class="text-lg font-bold text-white mb-1">Change Role</h2>
         <p class="text-slate-400 text-sm mb-4">
-          Change <span class="text-white font-semibold">{{ roleModal.user?.username }}</span>'s role from
-          <span class="font-semibold" :class="roleModal.user?.role === 'admin' ? 'text-purple-400' : 'text-slate-300'">{{ roleModal.user?.role }}</span>
-          to
-          <span class="font-semibold" :class="roleModal.newRole === 'admin' ? 'text-purple-400' : 'text-slate-300'">{{ roleModal.newRole }}</span>?
+          Change <span class="text-white font-semibold">{{ roleModal.user?.username }}</span>'s role:
         </p>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <button
+            v-for="r in availableRoles"
+            :key="r"
+            @click="roleModal.newRole = r"
+            class="px-3 py-1.5 rounded-lg text-sm font-semibold border transition-colors"
+            :class="roleModal.newRole === r ? 'border-blue-500 bg-blue-600 text-white' : 'border-slate-700 bg-slate-800 text-slate-400 hover:border-slate-500'"
+          >
+            {{ r }}
+          </button>
+        </div>
         <p v-if="roleModal.error" class="text-red-400 text-sm mb-3">{{ roleModal.error }}</p>
         <div class="flex gap-3 justify-end">
           <button @click="roleModal.open = false" class="px-4 py-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">Cancel</button>
@@ -122,7 +131,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useAuthStore } from '~/stores/auth'
 
 const auth = useAuthStore()
@@ -132,6 +141,26 @@ const resetModal = reactive({ open: false, user: null, newPassword: '', loading:
 const roleModal = reactive({ open: false, user: null, newRole: '', loading: false, error: '' })
 const deleteModal = reactive({ open: false, user: null, loading: false, error: '' })
 const toast = reactive({ show: false, message: '' })
+
+// Role badge styling
+function roleBadgeClass(role) {
+  if (role === 'superadmin') return 'bg-yellow-900/30 text-yellow-400 hover:bg-yellow-900/50'
+  if (role === 'admin') return 'bg-purple-900/30 text-purple-400 hover:bg-purple-900/50'
+  return 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+}
+
+// Available roles for role change modal
+const availableRoles = computed(() => {
+  if (auth.isSuperAdmin) return ['superadmin', 'admin', 'user']
+  return ['user'] // admin can only set to user
+})
+
+// Can caller delete this user?
+function canDelete(user) {
+  if (user.role === 'superadmin') return false
+  if (user.role === 'admin') return auth.isSuperAdmin
+  return true
+}
 
 function showToast(message) {
   toast.message = message
@@ -191,8 +220,10 @@ async function confirmReset() {
 // ── Role Change ──
 function openRoleModal(user) {
   if (user.id === auth.user?.id) return
+  if (user.role === 'superadmin') return // cannot change superadmin
+  if (user.role === 'admin' && !auth.isSuperAdmin) return // only superadmin can change admin
   roleModal.user = user
-  roleModal.newRole = user.role === 'admin' ? 'user' : 'admin'
+  roleModal.newRole = user.role === 'admin' ? 'user' : (auth.isSuperAdmin ? 'admin' : 'user')
   roleModal.error = ''
   roleModal.loading = false
   roleModal.open = true
