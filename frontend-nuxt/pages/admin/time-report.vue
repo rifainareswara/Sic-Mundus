@@ -133,7 +133,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '~/stores/auth'
 
-definePageMeta({ middleware: 'auth' })
+definePageMeta({})
 
 const auth = useAuthStore()
 
