@@ -152,4 +152,11 @@ async fn run_migrations(pool: &DbPool) {
     // Users
     sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS force_change_password BOOLEAN NOT NULL DEFAULT FALSE").execute(pool).await.expect("Failed to add force_change_password to users");
     sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT ''").execute(pool).await.expect("Failed to add full_name to users");
+
+    // Upgrade first registered admin to superadmin (migration for existing databases)
+    sqlx::query(
+        "UPDATE users SET role = 'superadmin'
+         WHERE id = (SELECT id FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1)
+           AND NOT EXISTS (SELECT 1 FROM users WHERE role = 'superadmin')"
+    ).execute(pool).await.ok();
 }
